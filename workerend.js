@@ -18,10 +18,9 @@ let chatTargetUpdated = false; // 标志是否更新了聊天目标
 const blockedUsers = []; // 本地存储被屏蔽用户的数组
 let pendingMessage = null; // 全局变量保存待发送的消息
 
-// 添加用户状态管理
-const userStates = {}; // 存储用户的对话状态
-
-const AUTO_END_TIMEOUT = 5 * 60 * 1000; // 5分钟
+// 添加新的全局变量
+let isAdminActive = true; // 跟踪管理员是否处于活跃聊天状态
+let lastActiveTime = Date.now(); // 记录最后活跃时间
 
 // 在程序启动时加载会话状态
 loadChatSession();
@@ -29,8 +28,6 @@ loadChatSession();
 loadBlockedUsers();
 // 在程序启动时加载骗子列表
 loadFraudList();
-// 在程序启动时加载用户状态
-loadUserStates();
 
 function escapeMarkdown(text) {
   return text.replace(/([_*[\]()~`>#+-=|{}.!])/g, '\\$1');
@@ -111,11 +108,6 @@ async function generateRecentChatButtons() {
       callback_data: `select_${chatId}`
     };
   }));
-  // 添加 'None' 选项
-  buttons.push({
-    text: 'None',
-    callback_data: 'select_none'
-  });
   return generateKeyboard(buttons);
 }
 
@@ -215,6 +207,8 @@ async function handleWebhook(event) {
   const update = await event.request.json()
   event.waitUntil(onUpdate(update))
 
+  await checkAdminActivity(); // 添加活动检查
+
   return new Response('Ok')
 }
 
@@ -285,74 +279,87 @@ async function onMessage(message) {
     };
   }
 
-  // 初始化用户状态
-  if (!userStates[chatId]) {
-    userStates[chatId] = 'active';
-    await saveUserStates();
-  }
-
   const session = chatSessions[chatId];
-  const state = userStates[chatId];
-
-  // 检查是否需要自动结束对话
-  if (state === 'active') {
-    const elapsed = Date.now() - session.lastInteraction;
-    if (elapsed > AUTO_END_TIMEOUT) { // 5分钟无活动
-      userStates[chatId] = 'ended';
-      await saveUserStates();
-      await sendMessage({
-        chat_id: chatId,
-        text: '对话已结束。下次发送 /start 可重新开始。'
-      });
-    }
-  }
 
   // 更新最后交互时间
   session.lastInteraction = Date.now();
-  await saveChatSession();
 
-  if (state === 'ended') {
-    if (message.text === '/start') {
-      userStates[chatId] = 'active';
-      await saveUserStates();
-      // 显示最近5个聊天对象和 'None' 选项
-      const recentChatButtons = await generateRecentChatButtons();
-      recentChatButtons.reply_markup.inline_keyboard.push([{ text: 'None', callback_data: 'select_none' }]);
-      return sendMessage({
-        chat_id: chatId,
-        text: "请选择一个聊天对象或选择 'None' 以不与任何人对话。",
-        reply_markup: recentChatButtons.reply_markup
-      });
-    } else {
-      // 处于结束状态，忽略其他消息
-      return sendMessage({
-        chat_id: chatId,
-        text: "对话已结束。发送 /start 以重新开始。"
+  // 获取当前聊天目标
+  currentChatTarget = await getCurrentChatTarget();
+
+  if (message.reply_to_message) {
+    const repliedChatId = await nfd.get('msg-map-' + message.reply_to_message.message_id, { type: "json" });
+    if (repliedChatId) {
+      currentChatTarget = repliedChatId;
+      await setCurrentChatTarget(repliedChatId); // 更新当前聊天目标
+      await saveRecentChatTargets(repliedChatId); // 保存最近的聊天目标
+
+      // 获取被回复用户的信息
+      const userInfo = await getUserInfo(repliedChatId);
+      let nickname = userInfo ? `${userInfo.first_name} ${userInfo.last_name || ''}`.trim() : `UID:${repliedChatId}`;
+      nickname = escapeMarkdown(nickname); // 转义 Markdown 特殊符号
+      const chatLink = userInfo.username ? `https://t.me/${userInfo.username}` : `tg://user?id=${repliedChatId}`; // 生成聊天链接
+
+      // 发送切换聊天目标的通知
+      await sendMessage({
+        chat_id: ADMIN_UID,
+        parse_mode: 'MarkdownV2', // 使用Markdown格式
+        text: `已切换到聊天目标:【 *${nickname}* 】 \nuid：${repliedChatId}\n[点击不用bot直接私聊](${chatLink})`
       });
     }
   }
 
-  // 处理 /end 命令
-  if (message.text === '/end') {
-    userStates[chatId] = 'ended';
-    await saveUserStates();
-    return sendMessage({
-      chat_id: chatId,
-      text: '对话已结束。下次发送 /start 可重新开始。'
-    });
+  // 更新最后活跃时间
+  lastActiveTime = Date.now();
+
+  // 检查是否超过5分钟不活跃
+  if (Date.now() - lastActiveTime > 5 * 60 * 1000) {
+    isAdminActive = false;
   }
 
   if (message.text) {
     if (chatId === ADMIN_UID) {
       // 管理员指令处理
       if (message.text === '/start') {
-        let startMsg = "欢迎使用聊天机器人";
-        await setBotCommands();
+        const recentTargets = await getRecentChatTargets();
+        if (recentTargets.length === 0) {
+          let startMsg = "欢迎使用聊天机器人";
+          await setBotCommands();
+          isAdminActive = true;
+          return sendMessage({
+            chat_id: message.chat.id,
+            text: startMsg,
+          });
+        } else {
+          isAdminActive = true;
+          const keyboard = await generateRecentChatButtonsWithNone();
+          return sendMessage({
+            chat_id: ADMIN_UID,
+            text: "请选择要对话的用户:",
+            ...keyboard
+          });
+        }
+      } else if (message.text === '/end') {
+        isAdminActive = false;
+        currentChatTarget = null;
         return sendMessage({
-          chat_id: message.chat.id,
-          text: startMsg,
+          chat_id: ADMIN_UID,
+          text: "已结束对话状态。在你选择新的对话对象之前，不会转发任何消息。"
         });
-      } else if (message.text === '/help') {
+      }
+      
+      // 如果管理员不处于活跃状态，大部分消息不会被转发
+      if (!isAdminActive && !message.text?.startsWith('/')) {
+        return sendMessage({
+          chat_id: ADMIN_UID,
+          text: "你当前处于未激活状态。请使用 /start 选择对话对象，或等待新消息。",
+          ...await generateRecentChatButtonsWithNone()
+        });
+      }
+      
+      // ...existing admin message handling code...
+
+      if (message.text === '/help') {
         let helpMsg = "可用指令列表:\n" +
                       "/start - 启动机器人会话\n" +
                       "/help - 显示此帮助信息\n" +
@@ -478,15 +485,10 @@ async function onMessage(message) {
       }
     } else if (message.text === '/start') {
       // 非管理员用户的 /start 命令处理
-      userStates[chatId] = 'active';
-      await saveUserStates();
       let startMsg = "欢迎使用聊天机器人";
-      const recentChatButtons = await generateRecentChatButtons();
-      recentChatButtons.reply_markup.inline_keyboard.push([{ text: 'None', callback_data: 'select_none' }]);
       return sendMessage({
         chat_id: message.chat.id,
-        text: `${startMsg}\n请选择一个聊天对象或选择 'None' 以不与任何人对话。`,
-        reply_markup: recentChatButtons.reply_markup
+        text: startMsg,
       });
     }
     // 其他消息或指令，转发给管理员
@@ -596,15 +598,6 @@ async function sendDirectMessage(text) {
 
 async function handleGuestMessage(message) {
   let chatId = message.chat.id.toString();
-  
-  // 检查用户状态
-  if (userStates[chatId] !== 'active') {
-    return sendMessage({
-      chat_id: chatId,
-      text: "对话已结束。发送 /start 可重新开始。"
-    });
-  }
-
   let isblocked = await nfd.get('isblocked-' + chatId, { type: "json" });
 
   if (isblocked) {
@@ -648,6 +641,11 @@ async function handleGuestMessage(message) {
     // 将新的聊天目标添加到最近聊天的数组中
     await saveRecentChatTargets(chatId);
   }
+  
+  // 当有新消息时，激活管理员状态
+  isAdminActive = true;
+  lastActiveTime = Date.now();
+
   return handleNotify(message);
 }
 
@@ -671,20 +669,18 @@ async function onCallbackQuery(callbackQuery) {
   const data = callbackQuery.data;
   const message = callbackQuery.message;
 
+  if (data === 'select_none') {
+    isAdminActive = false;
+    currentChatTarget = null;
+    await sendMessage({
+      chat_id: ADMIN_UID,
+      text: "已结束对话状态。在你选择新的对话对象之前，不会转发任何消息。"
+    });
+    return;
+  }
+
   if (data.startsWith('select_')) {
     const selectedChatId = data.split('_')[1];
-    const chatId = callbackQuery.from.id.toString();
-
-    if (selectedChatId === 'none') {
-      userStates[chatId] = 'ended';
-      await saveUserStates();
-      await sendMessage({
-        chat_id: chatId,
-        text: '对话已结束。下次发送 /start 可重新开始。'
-      });
-      return;
-    }
-
     if (currentChatTarget !== selectedChatId) {
       currentChatTarget = selectedChatId;
       chatTargetUpdated = true; // 设置标志
@@ -711,6 +707,8 @@ async function onCallbackQuery(callbackQuery) {
       };
       await saveChatSession();
       // 发送之前保存的消息
+      // 发送之前保存的消息
+      // 发送之前保存的消息
       if (pendingMessage) {
         try {
           if (pendingMessage.text) {
@@ -718,7 +716,25 @@ async function onCallbackQuery(callbackQuery) {
               chat_id: currentChatTarget,
               text: pendingMessage.text,
             });
-          } else if (pendingMessage.photo || pendingMessage.video || pendingMessage.document || pendingMessage.audio) {
+          } else if (pendingMessage.photo) {
+            await copyMessage({
+              chat_id: currentChatTarget,
+              from_chat_id: ADMIN_UID,
+              message_id: pendingMessage.message_id,
+            });
+          } else if (pendingMessage.video) {
+            await copyMessage({
+              chat_id: currentChatTarget,
+              from_chat_id: ADMIN_UID,
+              message_id: pendingMessage.message_id,
+            });
+          } else if (pendingMessage.document) {
+            await copyMessage({
+              chat_id: currentChatTarget,
+              from_chat_id: ADMIN_UID,
+              message_id: pendingMessage.message_id,
+            });
+          } else if (pendingMessage.audio) {
             await copyMessage({
               chat_id: currentChatTarget,
               from_chat_id: ADMIN_UID,
@@ -740,6 +756,7 @@ async function onCallbackQuery(callbackQuery) {
         pendingMessage = null; // 清空待发送消息
       }
     }
+    isAdminActive = true;
   }
 }
 
@@ -765,11 +782,10 @@ async function setCurrentChatTarget(target) {
   await FRAUD_LIST.put('currentChatTarget', JSON.stringify(session));
 }
 
-// 修改其他相关函数以支持状态管理
 async function handleNotify(message) {
   // 先判断是否是诈骗人员，如果是，则直接提醒
   // 如果不是，则根据时间间隔提醒：用户id，交易注意点等
-  let chatId = message.chat.id.toString();
+  let chatId = message.chat.id;
   if (await isFraud(chatId)) {
     return sendMessage({
       chat_id: ADMIN_UID,
@@ -918,15 +934,4 @@ async function isFraud(id){
   let db = await fetch(fraudDb).then(r => r.text());
   let arr = db.split('\n').filter(v => v);
   return arr.includes(id);
-}
-
-async function saveUserStates() {
-  await FRAUD_LIST.put('userStates', JSON.stringify(userStates));
-}
-
-async function loadUserStates() {
-  const storedStates = await FRAUD_LIST.get('userStates');
-  if (storedStates) {
-    Object.assign(userStates, JSON.parse(storedStates));
-  }
 }
