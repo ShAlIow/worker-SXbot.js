@@ -161,22 +161,18 @@ async function loadFraudList() {
 }
 
 async function setBotCommands() {
-  const commands = [
-    { command: 'start', description: '启动机器人会话' },
-    { command: 'help', description: '显示帮助信息' },
-    { command: 'search', description: '查看指定uid用户最新昵称' },
-    { command: 'block', description: '屏蔽用户 (仅管理员)' },
-    { command: 'unblock', description: '解除屏蔽用户 (仅管理员)' },
-    { command: 'checkblock', description: '检查用户是否被屏蔽 (仅管理员)' },
-    { command: 'fraud', description: '添加骗子ID - [本地库] (仅管理员)' },
-    { command: 'unfraud', description: '移除骗子ID - [本地库] (仅管理员)' },
-    { command: 'list', description: '查看骗子ID列表 - [本地库] (仅管理员)' },
-    { command: 'blocklist', description: '查看屏蔽用户列表 - [本地库] (仅管理员)' }
+    const commands = [
+        // 移除所有命令
+    ];
     
-    // 在此添加更多命令
-  ];
-
-  return requestTelegram('setMyCommands', makeReqBody({ commands }));
+    // 只为管理员设置命令
+    return requestTelegram('setMyCommands', makeReqBody({
+        commands,
+        scope: {
+            type: 'chat',
+            chat_id: ADMIN_UID
+        }
+    }));
 }
 
 addEventListener('fetch', event => {
@@ -304,30 +300,38 @@ async function onMessage(message) {
   }
 
   if (message.text) {
-    if (message.text === '/start') {
-      let startMsg = "欢迎使用聊天机器人";
-      await setBotCommands();
-      return sendMessage({
-        chat_id: message.chat.id,
-        text: startMsg,
-      });
-    } else if (message.text === '/help') {
-      let helpMsg = "可用指令列表:\n" +
-                    "/start - 启动机器人会话\n" +
-                    "/help - 显示此帮助信息\n" +
-                    "/search - 通过uid查询最新名字\n" + //查看指定uid最新用户名
-                    "/block - 屏蔽用户 (仅管理员)\n" +
-                    "/unblock - 解除屏蔽用户 (仅管理员)\n" +
-                    "/checkblock - 检查用户是否被屏蔽 (仅管理员)\n" +
-                    "/fraud - 添加骗子ID (仅管理员)\n" + // 更新帮助信息
-                    "/unfraud - 移除骗子ID (仅管理员)\n" + // 更新帮助信息
-                    "/list - 查看本地骗子ID列表 (仅管理员)\n" + // 添加新命令
-                    "/blocklist - 查看被屏蔽用户列表 (仅管理员)\n" + // 添加新命令
-                    "更多指令将在后续更新中添加。";
-      return sendMessage({
-        chat_id: message.chat.id,
-        text: helpMsg,
-      });
+    if (message.chat.id.toString() === ADMIN_UID) {
+        if (message.text === '/start') {
+            let startMsg = "欢迎使用聊天机器人（管理员版）";
+            await setBotCommands();
+            return sendMessage({
+                chat_id: message.chat.id,
+                text: startMsg,
+            });
+        } else if (message.text === '/help') {
+            let helpMsg = "管理员可用指令列表:\n" +
+                "/start - 启动机器人会话\n" +
+                "/help - 显示此帮助信息\n" +
+                "/search - 通过uid查询最新名字\n" +
+                "/block - 屏蔽用户\n" +
+                "/unblock - 解除屏蔽用户\n" +
+                "/checkblock - 检查用户是否被屏蔽\n" +
+                "/fraud - 添加骗子ID\n" +
+                "/unfraud - 移除骗子ID\n" +
+                "/list - 查看本地骗子ID列表\n" +
+                "/blocklist - 查看被屏蔽用户列表";
+            return sendMessage({
+                chat_id: message.chat.id,
+                text: helpMsg,
+            });
+        }
+    } else {
+        if (message.text.startsWith('/')) {
+            // 对于非管理员，忽略所有以 "/" 开头的命令
+            return;
+        }
+    }
+    // ... 其他消息处理逻辑 ...
     } else if (message.text === '/blocklist') {
       return listBlockedUsers();
     } else if (message.text.startsWith('/unblock ')) {
