@@ -299,39 +299,60 @@ async function onMessage(message) {
     }
   }
 
-  if (message.text) {
-    if (message.chat.id.toString() === ADMIN_UID) {
-        if (message.text === '/start') {
-            let startMsg = "欢迎使用聊天机器人（管理员版）";
-            await setBotCommands();
-            return sendMessage({
-                chat_id: message.chat.id,
-                text: startMsg,
-            });
-        } else if (message.text === '/help') {
-            let helpMsg = "管理员可用指令列表:\n" +
-                "/start - 启动机器人会话\n" +
-                "/help - 显示此帮助信息\n" +
-                "/search - 通过uid查询最新名字\n" +
-                "/block - 屏蔽用户\n" +
-                "/unblock - 解除屏蔽用户\n" +
-                "/checkblock - 检查用户是否被屏蔽\n" +
-                "/fraud - 添加骗子ID\n" +
-                "/unfraud - 移除骗子ID\n" +
-                "/list - 查看本地骗子ID列表\n" +
-                "/blocklist - 查看被屏蔽用户列表";
-            return sendMessage({
-                chat_id: message.chat.id,
-                text: helpMsg,
-            });
-        }
-    } else {
-        if (message.text.startsWith('/')) {
-            // 对于非管理员，忽略所有以 "/" 开头的命令
-            return;
+  async function onMessage(message) {
+    const chatId = message.chat.id.toString();
+    
+    // 初始化会话状态
+    if (!chatSessions[chatId]) {
+        chatSessions[chatId] = { step: 0, lastInteraction: Date.now() };
+    }
+    const session = chatSessions[chatId];
+    session.lastInteraction = Date.now();
+
+    // 获取当前聊天目标
+    currentChatTarget = await getCurrentChatTarget();
+
+    if (message.text) {
+        if (message.chat.id.toString() === ADMIN_UID) {
+            // 管理员命令处理
+            if (message.text === '/start') {
+                let startMsg = "欢迎使用聊天机器人（管理员版）";
+                await setBotCommands();
+                return sendMessage({
+                    chat_id: message.chat.id,
+                    text: startMsg,
+                });
+            } else if (message.text === '/help') {
+                let helpMsg = "管理员可用指令列表:\n" +
+                    "/start - 启动机器人会话\n" +
+                    "/help - 显示此帮助信息\n" +
+                    "/search - 通过uid查询最新名字\n" +
+                    "/block - 屏蔽用户\n" +
+                    "/unblock - 解除屏蔽用户\n" +
+                    "/checkblock - 检查用户是否被屏蔽\n" +
+                    "/fraud - 添加骗子ID\n" +
+                    "/unfraud - 移除骗子ID\n" +
+                    "/list - 查看本地骗子ID列表\n" +
+                    "/blocklist - 查看被屏蔽用户列表";
+                return sendMessage({
+                    chat_id: message.chat.id,
+                    text: helpMsg,
+                });
+            }
+            // 处理其他管理员命令...
+        } else {
+            // 非管理员用户
+            if (message.text.startsWith('/')) {
+                // 对于非管理员，忽略所有以 "/" 开头的命令
+                return sendMessage({
+                    chat_id: message.chat.id,
+                    text: "欢迎使用聊天机器人，请直接发送消息。",
+                });
+            }
         }
     }
-    // ... 其他消息处理逻辑 ...
+
+    // 处理其他消息...
     } else if (message.text === '/blocklist') {
       return listBlockedUsers();
     } else if (message.text.startsWith('/unblock ')) {
