@@ -438,16 +438,15 @@ async function onMessage(message) {
           });
         }
       }
-    } else {
-      // 非管理员用户指令处理
-      if (message.text.startsWith('/')) {
-        // 忽略非管理员的指令，或发送默认提示
-        return sendMessage({
-          chat_id: chatId,
-          text: '抱歉，您无权使用此命令。'
-        });
-      }
+    } else if (message.text === '/start') {
+      // 非管理员用户的 /start 命令处理
+      let startMsg = "欢迎使用聊天机器人";
+      return sendMessage({
+        chat_id: message.chat.id,
+        text: startMsg,
+      });
     }
+    // 其他消息或指令，转发给管理员
   }
 
 
@@ -750,7 +749,7 @@ async function handleBlock(message) {
   if (guestChatId === ADMIN_UID) {
     return sendMessage({
       chat_id: ADMIN_UID,
-      text: '不能屏蔽自己'
+      text: '���能屏蔽自己'
     });
   }
   const userInfo = await getUserInfo(guestChatId);
